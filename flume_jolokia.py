@@ -5,9 +5,9 @@
 Blackbird plugin for monitoring Apache Flume over Jolokia.
 """
 
+import abc
 import collections
 import json
-import pprint
 import urllib2
 
 import blackbird.plugins
@@ -31,91 +31,6 @@ class ConcreteJob(blackbird.plugins.base.JobBase):
         ]
     )
 
-    class ChannelFactory(object):
-        __mbean = 'org.apache.flume.channel:type={0}'
-        __attributes = [
-            'ChannelCapacity',
-            'ChannelFillPercentage',
-            'ChannelSize',
-            'EventPutAttemptCount',
-            'EventPutSuccessCount',
-            'EventTakeAttemptCount',
-            'EventTakeSuccessCount',
-            'StartTime',
-            'StopTime',
-        ]
-        __zabbix_key = 'flume.channel[{0},{1}]'
-
-        def __init__(self, channel_name):
-            self.__channel_name = channel_name
-
-        def mbean(self):
-            return self.__mbean.format(self.__channel_name)
-
-        def attributes(self):
-            return self.__attributes
-
-        def zabbix_key(self, attribute):
-            return self.__zabbix_key.format(self.__channel_name, attribute)
-
-
-    class SinkFactory(object):
-        __mbean = 'org.apache.flume.sink:type={0}'
-        __attributes = [
-            'BatchCompleteCount',
-            'BatchEmptyCount',
-            'BatchUnderflowCount',
-            'ConnectionClosedCount',
-            'ConnectionCreatedCount',
-            'ConnectionFailedCount',
-            'EventDrainAttemptCount',
-            'EventDrainSuccessCount',
-            'StartTime',
-            'StopTime',
-        ]
-        __zabbix_key = 'flume.sink[{0},{1}]'
-
-        def __init__(self, sink_name):
-            self.__sink_name = sink_name
-
-        def mbean(self):
-            return self.__mbean.format(self.__sink_name)
-
-        def attributes(self):
-            return self.__attributes
-
-        def zabbix_key(self, attribute):
-            return self.__zabbix_key.format(self.__sink_name, attribute)
-
-
-    class SourceFactory(object):
-        __mbean = 'org.apache.flume.source:type={0}'
-        __attributes = [
-            'AppendAcceptedCount',
-            'AppendBatchAcceptedCount',
-            'AppendBatchReceivedCount',
-            'AppendReceivedCount',
-            'EventAcceptedCount',
-            'EventReceivedCount',
-            'OpenConnectionCount',
-            'StartTime',
-            'StopTime',
-        ]
-        __zabbix_key = 'flume.source[{0},{1}]'
-
-        def __init__(self, source_name):
-            self.__source_name = source_name
-
-        def mbean(self):
-            return self.__mbean.format(self.__source_name)
-
-        def attributes(self):
-            return self.__attributes
-
-        def zabbix_key(self, attribute):
-            return self.__zabbix_key.format(self.__source_name, attribute)
-
-
     def __init__(self, options, queue=None, logger=None):
         super(ConcreteJob, self).__init__(options, queue, logger)
         self.options = self.options_factory(
@@ -129,28 +44,28 @@ class ConcreteJob(blackbird.plugins.base.JobBase):
             zabbix_hostname=options['zabbix_hostname'],
         )
 
-        self.channel = self.ChannelFactory(self.options.flume_channel)
-        self.sink = self.SinkFactory(self.options.flume_sink)
-        self.source = self.SourceFactory(self.options.flume_source)
+        self.channel_items = ChannelItems(self.options.flume_channel)
+        self.sink_items = SinkItems(self.options.flume_sink)
+        self.source_items = SourceItems(self.options.flume_source)
 
     def build_items(self):
-        self.__build_items(self.channel)
-        self.__build_items(self.sink)
-        self.__build_items(self.source)
+        self.__build_items(self.channel_items)
+        self.__build_items(self.sink_items)
+        self.__build_items(self.source_items)
 
         # For fatal error(restarts thread itself)
         # raise blackbird.plugins.base.BlackbirdPluginError('Piyo')
 
-    def __build_items(self, metrics):
+    def __build_items(self, items):
         result = self.__jolokia_read(
-            metrics.mbean(),
-            metrics.attributes(),
+            items.mbean(),
+            items.attributes(),
         )
 
-        for attribute in metrics.attributes():
+        for attribute in items.attributes():
             clock = result['timestamp']
             host = self.options.zabbix_hostname
-            key = metrics.zabbix_key(attribute)
+            key = items.zabbix_key(attribute)
             value = result['value'][attribute]
 
             item = FlumeItem(clock, host, key, value)
@@ -191,7 +106,7 @@ class ConcreteJob(blackbird.plugins.base.JobBase):
 
 class FlumeItem(blackbird.plugins.base.ItemBase):
     """
-    Blackbird data type for collected flume metrics.
+    Blackbird data type for collected flume items.
     """
     def __init__(self, clock, host, key, value):
         super(FlumeItem, self).__init__(key, value, host, clock)
@@ -242,6 +157,107 @@ class Validator(blackbird.plugins.base.ValidatorBase):
             'flume_source = string',
         )
         return self.__spec
+
+
+class ItemsBase(object):
+    __metaclass__ = abc.ABCMeta
+
+    @abc.abstractproperty
+    def _mbean(self):
+        pass
+
+    @abc.abstractproperty
+    def _attributes(self):
+        pass
+
+    @abc.abstractproperty
+    def _zabbix_key(self):
+        pass
+
+    def __init__(self, channel_name):
+        self.__channel_name = channel_name
+
+    def mbean(self):
+        return self._mbean.format(self.__channel_name)
+
+    def attributes(self):
+        return self._attributes
+
+    def zabbix_key(self, attribute):
+        return self._zabbix_key.format(self.__channel_name, attribute)
+
+
+class ChannelItems(ItemsBase):
+    @property
+    def _mbean(self):
+        return 'org.apache.flume.channel:type={0}'
+
+    @property
+    def _attributes(self):
+        return [
+            'ChannelCapacity',
+            'ChannelFillPercentage',
+            'ChannelSize',
+            'EventPutAttemptCount',
+            'EventPutSuccessCount',
+            'EventTakeAttemptCount',
+            'EventTakeSuccessCount',
+            'StartTime',
+            'StopTime',
+        ]
+
+    @property
+    def _zabbix_key(self):
+        return 'flume.channel[{0},{1}]'
+
+
+class SinkItems(ItemsBase):
+    @property
+    def _mbean(self):
+        return 'org.apache.flume.sink:type={0}'
+
+    @property
+    def _attributes(self):
+        return [
+            'BatchCompleteCount',
+            'BatchEmptyCount',
+            'BatchUnderflowCount',
+            'ConnectionClosedCount',
+            'ConnectionCreatedCount',
+            'ConnectionFailedCount',
+            'EventDrainAttemptCount',
+            'EventDrainSuccessCount',
+            'StartTime',
+            'StopTime',
+        ]
+
+    @property
+    def _zabbix_key(self):
+        return 'flume.sink[{0},{1}]'
+
+
+class SourceItems(ItemsBase):
+    @property
+    def _mbean(self):
+        return 'org.apache.flume.source:type={0}'
+
+    @property
+    def _attributes(self):
+        return [
+            'AppendAcceptedCount',
+            'AppendBatchAcceptedCount',
+            'AppendBatchReceivedCount',
+            'AppendReceivedCount',
+            'EventAcceptedCount',
+            'EventReceivedCount',
+            'OpenConnectionCount',
+            'StartTime',
+            'StopTime',
+        ]
+
+    @property
+    def _zabbix_key(self):
+        return 'flume.source[{0},{1}]'
 
 
 if __name__ == '__main__':
