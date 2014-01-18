@@ -20,9 +20,6 @@ class ConcreteJob(blackbird.plugins.base.JobBase):
     options_factory = collections.namedtuple(
         'options',
         [
-            'flume_channel',
-            'flume_sink',
-            'flume_source',
             'jolokia_context',
             'jolokia_host',
             'jolokia_port',
@@ -34,9 +31,6 @@ class ConcreteJob(blackbird.plugins.base.JobBase):
     def __init__(self, options, queue=None, logger=None):
         super(ConcreteJob, self).__init__(options, queue, logger)
         self.options = self.options_factory(
-            flume_channel=options['flume_channel'],
-            flume_sink=options['flume_sink'],
-            flume_source=options['flume_source'],
             jolokia_context=options['jolokia_context'],
             jolokia_host=options['jolokia_host'],
             jolokia_port=options['jolokia_port'],
@@ -44,34 +38,67 @@ class ConcreteJob(blackbird.plugins.base.JobBase):
             zabbix_hostname=options['zabbix_hostname'],
         )
 
-        self.channel_items = ChannelItems(self.options.flume_channel)
-        self.sink_items = SinkItems(self.options.flume_sink)
-        self.source_items = SourceItems(self.options.flume_source)
+        self.jmx_channel_items = JMXChannelItems()
+        self.jmx_sink_items = JMXSinkItems()
+        self.jmx_source_items = JMXSourceItems()
 
     def build_items(self):
-        self.__build_items(self.channel_items)
-        self.__build_items(self.sink_items)
-        self.__build_items(self.source_items)
+        self.__build_items(self.jmx_channel_items)
+        self.__build_items(self.jmx_sink_items)
+        self.__build_items(self.jmx_source_items)
 
         # For fatal error(restarts thread itself)
         # raise blackbird.plugins.base.BlackbirdPluginError('Piyo')
 
-    def __build_items(self, items):
+    def __build_items(self, jmx_items):
         result = self.__jolokia_read(
-            items.mbean(),
-            items.attributes(),
+            jmx_items.mbean_pattern(),
+            jmx_items.attributes(),
         )
 
-        for attribute in items.attributes():
-            clock = result['timestamp']
-            host = self.options.zabbix_hostname
-            key = items.zabbix_key(attribute)
-            value = result['value'][attribute]
+        mbeans = result['value'].keys()
 
-            item = FlumeItem(clock, host, key, value)
+        if jmx_items.mbeans_differ(mbeans):
+            self.logger.debug('MBeans Differ!')
+            jmx_items.set_mbeans(mbeans)
+            self.__build_discovery_items(jmx_items)
+        else:
+            self.logger.debug('MBeans identical.')
 
-            self.queue.put(item, block=False)
-            self.logger.debug(item)
+        for mbean in jmx_items.get_mbeans():
+            for attribute in jmx_items.attributes():
+                clock = result['timestamp']
+                host = self.options.zabbix_hostname
+                key = jmx_items.zabbix_key(mbean, attribute)
+                value = result['value'][mbean][attribute]
+
+                item = FlumeItem(clock, host, key, value)
+
+                self.queue.put(item, block=False)
+                self.logger.debug(item)
+
+    def __build_discovery_items(self, jmx_items):
+        discovery_items_list = []
+
+        for mbean in jmx_items.get_mbeans():
+            discovery_item = {}
+
+            _, mbean_properties = mbean.split(':', 1)
+            discovery_item['#MBEAN'] = mbean_properties
+
+            discovery_items_list.append(discovery_item)
+
+        discovery_items_json = json.dumps(discovery_items_list)
+
+        clock = None
+        host = self.options.zabbix_hostname
+        key = jmx_items.zabbix_discovery_key()
+        value = discovery_items_json
+
+        item = FlumeItem(clock, host, key, value)
+
+        self.queue.put(item, block=False)
+        self.logger.debug(item)
 
     def __jolokia_read(self, mbean, attributes):
         jolokia_result_json = urllib2.urlopen(
@@ -152,18 +179,15 @@ class Validator(blackbird.plugins.base.ValidatorBase):
             'jolokia_port = integer(0, 65535)',
             'jolokia_context = string(default="/jolokia")',
             'jolokia_timeout = integer(default=10)',
-            'flume_channel = string',
-            'flume_sink = string',
-            'flume_source = string',
         )
         return self.__spec
 
 
-class ItemsBase(object):
+class JMXItemsBase(object):
     __metaclass__ = abc.ABCMeta
 
     @abc.abstractproperty
-    def _mbean(self):
+    def _mbean_pattern(self):
         pass
 
     @abc.abstractproperty
@@ -174,23 +198,46 @@ class ItemsBase(object):
     def _zabbix_key(self):
         pass
 
-    def __init__(self, channel_name):
-        self.__channel_name = channel_name
+    @abc.abstractproperty
+    def _zabbix_discovery_key(self):
+        pass
 
-    def mbean(self):
-        return self._mbean.format(self.__channel_name)
+    def __init__(self):
+        self.__mbeans = []
+
+    def mbean_pattern(self):
+        return self._mbean_pattern
 
     def attributes(self):
         return self._attributes
 
-    def zabbix_key(self, attribute):
-        return self._zabbix_key.format(self.__channel_name, attribute)
+    def zabbix_key(self, mbean, attribute):
+        _, mbean_properties = mbean.split(':', 1)
+        return self._zabbix_key.format(mbean_properties, attribute)
+
+    def zabbix_discovery_key(self):
+        return self._zabbix_discovery_key
+
+    def get_mbeans(self):
+        return self.__mbeans
+
+    def set_mbeans(self, mbeans):
+        self.__mbeans = mbeans
+
+    def mbeans_differ(self, new_mbeans):
+        sorted_current_mbeans = sorted(self.__mbeans)
+        sorted_new_mbeans = sorted(new_mbeans)
+
+        if sorted_current_mbeans != sorted_new_mbeans:
+            return True
+        else:
+            return False
 
 
-class ChannelItems(ItemsBase):
+class JMXChannelItems(JMXItemsBase):
     @property
-    def _mbean(self):
-        return 'org.apache.flume.channel:type={0}'
+    def _mbean_pattern(self):
+        return 'org.apache.flume.channel:type=*'
 
     @property
     def _attributes(self):
@@ -210,11 +257,15 @@ class ChannelItems(ItemsBase):
     def _zabbix_key(self):
         return 'flume.channel[{0},{1}]'
 
-
-class SinkItems(ItemsBase):
     @property
-    def _mbean(self):
-        return 'org.apache.flume.sink:type={0}'
+    def _zabbix_discovery_key(self):
+        return 'flume.channel.discovery'
+
+
+class JMXSinkItems(JMXItemsBase):
+    @property
+    def _mbean_pattern(self):
+        return 'org.apache.flume.sink:type=*'
 
     @property
     def _attributes(self):
@@ -235,11 +286,15 @@ class SinkItems(ItemsBase):
     def _zabbix_key(self):
         return 'flume.sink[{0},{1}]'
 
-
-class SourceItems(ItemsBase):
     @property
-    def _mbean(self):
-        return 'org.apache.flume.source:type={0}'
+    def _zabbix_discovery_key(self):
+        return 'flume.sink.discovery'
+
+
+class JMXSourceItems(JMXItemsBase):
+    @property
+    def _mbean_pattern(self):
+        return 'org.apache.flume.source:type=*'
 
     @property
     def _attributes(self):
@@ -258,6 +313,10 @@ class SourceItems(ItemsBase):
     @property
     def _zabbix_key(self):
         return 'flume.source[{0},{1}]'
+
+    @property
+    def _zabbix_discovery_key(self):
+        return 'flume.source.discovery'
 
 
 if __name__ == '__main__':
