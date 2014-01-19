@@ -1,12 +1,7 @@
-#!/usr/bin/env python
 # -*- encoding: utf-8 -*-
-
-"""
-Blackbird plugin for monitoring Apache Flume over Jolokia.
-"""
+# pylint: disable=missing-docstring, too-few-public-methods
 
 import abc
-import collections
 import json
 import urllib2
 
@@ -14,30 +9,8 @@ import blackbird.plugins
 
 
 class ConcreteJob(blackbird.plugins.base.JobBase):
-    """
-    Blackbird job for actual data collection.
-    """
-    options_factory = collections.namedtuple(
-        'options',
-        [
-            'jolokia_context',
-            'jolokia_host',
-            'jolokia_port',
-            'jolokia_timeout',
-            'zabbix_hostname',
-        ]
-    )
-
-    def __init__(self, options, queue=None, logger=None):
+    def __init__(self, options, queue, logger):
         super(ConcreteJob, self).__init__(options, queue, logger)
-        self.options = self.options_factory(
-            jolokia_context=options['jolokia_context'],
-            jolokia_host=options['jolokia_host'],
-            jolokia_port=options['jolokia_port'],
-            jolokia_timeout=options['jolokia_timeout'],
-            zabbix_hostname=options['zabbix_hostname'],
-        )
-
         self.jmx_channel_items = JMXChannelItems()
         self.jmx_sink_items = JMXSinkItems()
         self.jmx_source_items = JMXSourceItems()
@@ -46,9 +19,6 @@ class ConcreteJob(blackbird.plugins.base.JobBase):
         self.__build_items(self.jmx_channel_items)
         self.__build_items(self.jmx_sink_items)
         self.__build_items(self.jmx_source_items)
-
-        # For fatal error(restarts thread itself)
-        # raise blackbird.plugins.base.BlackbirdPluginError('Piyo')
 
     def __build_items(self, jmx_items):
         result = self.__jolokia_read(
@@ -59,52 +29,28 @@ class ConcreteJob(blackbird.plugins.base.JobBase):
         mbeans = result['value'].keys()
 
         if jmx_items.mbeans_differ(mbeans):
-            self.logger.debug('MBeans Differ!')
             jmx_items.set_mbeans(mbeans)
             self.__build_discovery_items(jmx_items)
-        else:
-            self.logger.debug('MBeans identical.')
 
         for mbean in jmx_items.get_mbeans():
             for attribute in jmx_items.attributes():
-                clock = result['timestamp']
-                host = self.options.zabbix_hostname
                 key = jmx_items.zabbix_key(mbean, attribute)
+                clock = result['timestamp']
                 value = result['value'][mbean][attribute]
 
-                item = FlumeItem(clock, host, key, value)
-
-                self.queue.put(item, block=False)
-                self.logger.debug(item)
+                self.__enqueue_item(key, value, clock)
 
     def __build_discovery_items(self, jmx_items):
-        discovery_items_list = []
-
-        for mbean in jmx_items.get_mbeans():
-            discovery_item = {}
-
-            _, mbean_properties = mbean.split(':', 1)
-            discovery_item['#MBEAN'] = mbean_properties
-
-            discovery_items_list.append(discovery_item)
-
-        discovery_items_json = json.dumps(discovery_items_list)
-
-        clock = None
-        host = self.options.zabbix_hostname
         key = jmx_items.zabbix_discovery_key()
-        value = discovery_items_json
+        value = jmx_items.zabbix_discovery_item()
 
-        item = FlumeItem(clock, host, key, value)
-
-        self.queue.put(item, block=False)
-        self.logger.debug(item)
+        self.__enqueue_item(key, value)
 
     def __jolokia_read(self, mbean, attributes):
         jolokia_result_json = urllib2.urlopen(
             url=self.__jolokia_url(),
             data=self.__jolokia_json_read(mbean, attributes),
-            timeout=self.options.jolokia_timeout,
+            timeout=self.options['jolokia_timeout'],
         )
 
         jolokia_result_dict = json.load(jolokia_result_json)
@@ -113,9 +59,9 @@ class ConcreteJob(blackbird.plugins.base.JobBase):
 
     def __jolokia_url(self):
         jolokia_url = 'http://{0}:{1}{2}/'.format(
-            self.options.jolokia_host,
-            self.options.jolokia_port,
-            self.options.jolokia_context,
+            self.options['jolokia_host'],
+            self.options['jolokia_port'],
+            self.options['jolokia_context'],
         )
 
         return jolokia_url
@@ -130,12 +76,17 @@ class ConcreteJob(blackbird.plugins.base.JobBase):
 
         return jolokia_json
 
+    def __enqueue_item(self, key, value, clock=None):
+        host = self.options['zabbix_hostname']
+
+        item = FlumeItem(host, key, value, clock)
+
+        self.queue.put(item, block=False)
+        self.logger.debug(item)
+
 
 class FlumeItem(blackbird.plugins.base.ItemBase):
-    """
-    Blackbird data type for collected flume items.
-    """
-    def __init__(self, clock, host, key, value):
+    def __init__(self, host, key, value, clock=None):
         super(FlumeItem, self).__init__(key, value, host, clock)
         self.__data = {}
         self.__generate()
@@ -145,9 +96,9 @@ class FlumeItem(blackbird.plugins.base.ItemBase):
         return self.__data
 
     def __generate(self):
-        self.__data['clock'] = int(self.clock)
         self.__data['host'] = self.host
         self.__data['key'] = self.key
+        self.__data['clock'] = int(self.clock)
 
         if isinstance(self.value, float):
             self.__data['value'] = round(self.value, 6)
@@ -162,14 +113,7 @@ class FlumeItem(blackbird.plugins.base.ItemBase):
 
 
 class Validator(blackbird.plugins.base.ValidatorBase):
-    """
-    Blackbird configuration validator and default value setter.
-    """
     def __init__(self):
-        self.__spec = None
-
-    @property
-    def spec(self):
         self.__spec = (
             '[{0}]'.format(__name__),
             'zabbix_hostname = string(default={0})'.format(
@@ -180,6 +124,9 @@ class Validator(blackbird.plugins.base.ValidatorBase):
             'jolokia_context = string(default="/jolokia")',
             'jolokia_timeout = integer(default=10)',
         )
+
+    @property
+    def spec(self):
         return self.__spec
 
 
@@ -188,19 +135,19 @@ class JMXItemsBase(object):
 
     @abc.abstractproperty
     def _mbean_pattern(self):
-        pass
+        return 'Abstract Property.'
 
     @abc.abstractproperty
     def _attributes(self):
-        pass
+        return 'Abstract Property.'
 
     @abc.abstractproperty
     def _zabbix_key(self):
-        pass
+        return 'Abstract Property.'
 
     @abc.abstractproperty
     def _zabbix_discovery_key(self):
-        pass
+        return 'Abstract Property.'
 
     def __init__(self):
         self.__mbeans = []
@@ -217,6 +164,22 @@ class JMXItemsBase(object):
 
     def zabbix_discovery_key(self):
         return self._zabbix_discovery_key
+
+    def zabbix_discovery_item(self):
+        discovery_item_dict = {}
+        discovery_item_dict['data'] = []
+
+        for mbean in self.__mbeans:
+            discovery_item = {}
+
+            _, mbean_properties = mbean.split(':', 1)
+            discovery_item['{#MBEAN}'] = mbean_properties
+
+            discovery_item_dict['data'].append(discovery_item)
+
+        discovery_item_json = json.dumps(discovery_item_dict)
+
+        return discovery_item_json
 
     def get_mbeans(self):
         return self.__mbeans
@@ -317,7 +280,3 @@ class JMXSourceItems(JMXItemsBase):
     @property
     def _zabbix_discovery_key(self):
         return 'flume.source.discovery'
-
-
-if __name__ == '__main__':
-    pass
