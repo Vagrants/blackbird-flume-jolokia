@@ -45,3 +45,7 @@ nosetests.xml
 Session.vim
 [._]*.s[a-w][a-z]
 [._]s[a-w][a-z]
+
+# py.test
+/.cache/
+/htmlcov/
