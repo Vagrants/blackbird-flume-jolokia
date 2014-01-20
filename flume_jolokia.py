@@ -20,19 +20,19 @@ class ConcreteJob(blackbird.plugins.base.JobBase):
         self.__build_items(self.jmx_sink_items)
         self.__build_items(self.jmx_source_items)
 
+    def build_discovery_items(self):
+        self.__build_discovery_items(self.jmx_channel_items)
+        self.__build_discovery_items(self.jmx_sink_items)
+        self.__build_discovery_items(self.jmx_source_items)
+
     def __build_items(self, jmx_items):
-        result = self.__jolokia_read(
+        request = self.__request_read(
             jmx_items.mbean_pattern(),
             jmx_items.attributes(),
         )
+        result = self.__jolokia(request)
 
-        mbeans = result['value'].keys()
-
-        if jmx_items.mbeans_differ(mbeans):
-            jmx_items.set_mbeans(mbeans)
-            self.__build_discovery_items(jmx_items)
-
-        for mbean in jmx_items.get_mbeans():
+        for mbean in result['value'].keys():
             for attribute in jmx_items.attributes():
                 key = jmx_items.zabbix_key(mbean, attribute)
                 clock = result['timestamp']
@@ -41,21 +41,57 @@ class ConcreteJob(blackbird.plugins.base.JobBase):
                 self.__enqueue_item(key, value, clock)
 
     def __build_discovery_items(self, jmx_items):
+        discovery_item_dict = {}
+        discovery_item_dict['data'] = []
+
+        request = self.__request_search(jmx_items.mbean_pattern())
+        result = self.__jolokia(request)
+
+        for mbean in result['value']:
+            discovery_item = {}
+
+            _, mbean_properties = mbean.split(':', 1)
+            discovery_item['{#MBEAN}'] = mbean_properties
+
+            discovery_item_dict['data'].append(discovery_item)
+
         key = jmx_items.zabbix_discovery_key()
-        value = jmx_items.zabbix_discovery_item()
+        value = json.dumps(discovery_item_dict)
 
         self.__enqueue_item(key, value)
 
-    def __jolokia_read(self, mbean, attributes):
-        jolokia_result_json = urllib2.urlopen(
-            url=self.__jolokia_url(),
-            data=self.__jolokia_json_read(mbean, attributes),
+    def __jolokia(self, request):
+        result = urllib2.urlopen(
+            url=request,
             timeout=self.options['jolokia_timeout'],
         )
 
-        jolokia_result_dict = json.load(jolokia_result_json)
+        return json.load(result)
 
-        return jolokia_result_dict
+    def __request_read(self, mbean, attributes):
+        request = urllib2.Request(self.__jolokia_url())
+
+        query_dict = {}
+        query_dict['type'] = 'read'
+        query_dict['mbean'] = mbean
+        query_dict['attribute'] = attributes
+        query_json = json.dumps(query_dict).encode('utf-8')
+
+        request.add_data(query_json)
+
+        return request
+
+    def __request_search(self, mbean):
+        request = urllib2.Request(self.__jolokia_url())
+
+        query_dict = {}
+        query_dict['type'] = 'search'
+        query_dict['mbean'] = mbean
+        query_json = json.dumps(query_dict).encode('utf-8')
+
+        request.add_data(query_json)
+
+        return request
 
     def __jolokia_url(self):
         jolokia_url = 'http://{0}:{1}{2}/'.format(
@@ -65,16 +101,6 @@ class ConcreteJob(blackbird.plugins.base.JobBase):
         )
 
         return jolokia_url
-
-    @classmethod
-    def __jolokia_json_read(cls, mbean, attributes):
-        jolokia_dict = {}
-        jolokia_dict['type'] = 'read'
-        jolokia_dict['mbean'] = mbean
-        jolokia_dict['attribute'] = attributes
-        jolokia_json = json.dumps(jolokia_dict).encode('utf-8')
-
-        return jolokia_json
 
     def __enqueue_item(self, key, value, clock=None):
         host = self.options['zabbix_hostname']
@@ -150,7 +176,7 @@ class JMXItemsBase(object):
         return 'Abstract Property.'
 
     def __init__(self):
-        self.__mbeans = []
+        pass
 
     def mbean_pattern(self):
         return self._mbean_pattern
@@ -165,42 +191,11 @@ class JMXItemsBase(object):
     def zabbix_discovery_key(self):
         return self._zabbix_discovery_key
 
-    def zabbix_discovery_item(self):
-        discovery_item_dict = {}
-        discovery_item_dict['data'] = []
-
-        for mbean in self.__mbeans:
-            discovery_item = {}
-
-            _, mbean_properties = mbean.split(':', 1)
-            discovery_item['{#MBEAN}'] = mbean_properties
-
-            discovery_item_dict['data'].append(discovery_item)
-
-        discovery_item_json = json.dumps(discovery_item_dict)
-
-        return discovery_item_json
-
-    def get_mbeans(self):
-        return self.__mbeans
-
-    def set_mbeans(self, mbeans):
-        self.__mbeans = mbeans
-
-    def mbeans_differ(self, new_mbeans):
-        sorted_current_mbeans = sorted(self.__mbeans)
-        sorted_new_mbeans = sorted(new_mbeans)
-
-        if sorted_current_mbeans != sorted_new_mbeans:
-            return True
-        else:
-            return False
-
 
 class JMXChannelItems(JMXItemsBase):
     @property
     def _mbean_pattern(self):
-        return 'org.apache.flume.channel:type=*'
+        return 'org.apache.flume.channel:*'
 
     @property
     def _attributes(self):
@@ -228,7 +223,7 @@ class JMXChannelItems(JMXItemsBase):
 class JMXSinkItems(JMXItemsBase):
     @property
     def _mbean_pattern(self):
-        return 'org.apache.flume.sink:type=*'
+        return 'org.apache.flume.sink:*'
 
     @property
     def _attributes(self):
@@ -257,7 +252,7 @@ class JMXSinkItems(JMXItemsBase):
 class JMXSourceItems(JMXItemsBase):
     @property
     def _mbean_pattern(self):
-        return 'org.apache.flume.source:type=*'
+        return 'org.apache.flume.source:*'
 
     @property
     def _attributes(self):

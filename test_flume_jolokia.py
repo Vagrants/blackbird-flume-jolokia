@@ -26,67 +26,12 @@ class TestJMXItemsBase(object):
         def _zabbix_discovery_key(self):
             return None
 
-    def test_set_mbeans(self):
-        jmx_test_items = self.JMXTestItems()
-        mbeans = [
-            'org.example.test:name=object1',
-            'org.example.test:name=object2',
-        ]
-
-        jmx_test_items.set_mbeans(mbeans)
-
-        assert sorted(mbeans) == sorted(
-            jmx_test_items._JMXItemsBase__mbeans
-        )
-
-    def test_get_mbeans(self):
-        jmx_test_items = self.JMXTestItems()
-        mbeans = [
-            'org.example.test:name=object1',
-            'org.example.test:name=object2',
-        ]
-
-        jmx_test_items._JMXItemsBase__mbeans = mbeans
-
-        assert sorted(mbeans) == sorted(jmx_test_items.get_mbeans())
-
-    def test_mbeans_not_differ(self):
-        jmx_test_items = self.JMXTestItems()
-        initial_mbeans = [
-            'org.example.test:name=object1',
-            'org.example.test:name=object2',
-        ]
-        tested_mbeans = [
-            'org.example.test:name=object2',
-            'org.example.test:name=object1',
-        ]
-
-        jmx_test_items._JMXItemsBase__mbeans = initial_mbeans
-
-        assert not jmx_test_items.mbeans_differ(tested_mbeans)
-
-    def test_mbeans_actually_differ(self):
-        jmx_test_items = self.JMXTestItems()
-        initial_mbeans = [
-            'org.example.test:name=object1',
-            'org.example.test:name=object2',
-        ]
-        tested_mbeans = [
-            'org.example.test:name=object3',
-            'org.example.test:name=object2',
-            'org.example.test:name=object1',
-        ]
-
-        jmx_test_items._JMXItemsBase__mbeans = initial_mbeans
-
-        assert jmx_test_items.mbeans_differ(tested_mbeans)
-
 
 class TestJMXChannelItems(object):
     def test_mbean_pattern(self):
         jmx_channel_items = JMXChannelItems()
 
-        expected_return = 'org.apache.flume.channel:type=*'
+        expected_return = 'org.apache.flume.channel:*'
         assert expected_return == jmx_channel_items.mbean_pattern()
 
     def test_attributes(self):
@@ -126,7 +71,7 @@ class TestJMXSinkItems(object):
     def test_mbean_pattern(self):
         jmx_sink_items = JMXSinkItems()
 
-        expected_return = 'org.apache.flume.sink:type=*'
+        expected_return = 'org.apache.flume.sink:*'
         assert expected_return == jmx_sink_items.mbean_pattern()
 
     def test_attributes(self):
@@ -165,7 +110,7 @@ class TestJMXSourceItems(object):
     def test_mbean_pattern(self):
         jmx_source_items = JMXSourceItems()
 
-        expected_return = 'org.apache.flume.source:type=*'
+        expected_return = 'org.apache.flume.source:*'
         assert expected_return == jmx_source_items.mbean_pattern()
 
     def test_attributes(self):
