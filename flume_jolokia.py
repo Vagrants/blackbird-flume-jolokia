@@ -1,6 +1,8 @@
 # -*- encoding: utf-8 -*-
 # pylint: disable=missing-docstring, too-few-public-methods
 
+__VERSION__ = '0.1.0'
+
 import abc
 import json
 import urllib2
@@ -16,6 +18,7 @@ class ConcreteJob(blackbird.plugins.base.JobBase):
         self.jmx_source_items = JMXSourceItems()
 
     def build_items(self):
+        self.__build_ping_item()
         self.__build_items(self.jmx_channel_items)
         self.__build_items(self.jmx_sink_items)
         self.__build_items(self.jmx_source_items)
@@ -24,6 +27,10 @@ class ConcreteJob(blackbird.plugins.base.JobBase):
         self.__build_discovery_items(self.jmx_channel_items)
         self.__build_discovery_items(self.jmx_sink_items)
         self.__build_discovery_items(self.jmx_source_items)
+
+    def __build_ping_item(self):
+        self.__enqueue_item('blackbird.flume_jolokia.ping', 1)
+        self.__enqueue_item('blackbird.flume_jolokia.version', __VERSION__)
 
     def __build_items(self, jmx_items):
         request = self.__request_read(
