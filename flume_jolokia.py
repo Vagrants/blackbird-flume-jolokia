@@ -48,7 +48,6 @@ class ConcreteJob(blackbird.plugins.base.JobBase):
 
                     self.__enqueue_item(key, value, clock)
 
-
     def __build_discovery_items(self, jmx_items):
         discovery_item_dict = {}
         discovery_item_dict['data'] = []
@@ -83,11 +82,11 @@ class ConcreteJob(blackbird.plugins.base.JobBase):
             else:
                 self.logger.warn('Invalid status code returned from Jolokia.')
                 return None
-        except urllib2.URLError as url_error:
-            self.logger.warn(url_error)
-            return None
         except urllib2.HTTPError as http_error:
-            self.logger.warn(http_error)
+            self.logger.warn(str(http_error))
+            return None
+        except urllib2.URLError as url_error:
+            self.logger.warn(str(url_error))
             return None
 
     def __request_read(self, mbean, attributes):
@@ -130,7 +129,7 @@ class ConcreteJob(blackbird.plugins.base.JobBase):
         item = FlumeItem(host, key, value, clock)
 
         self.queue.put(item, block=False)
-        self.logger.debug(item)
+        self.logger.debug(str(item))
 
 
 class FlumeItem(blackbird.plugins.base.ItemBase):
