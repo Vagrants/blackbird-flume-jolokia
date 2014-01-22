@@ -78,7 +78,7 @@ class ConcreteJob(blackbird.plugins.base.JobBase):
             )
             result_dict = json.load(result)
 
-            if result_dict['status'] == '200':
+            if result_dict['status'] == 200:
                 return result_dict
             else:
                 self.logger.warn('Invalid status code returned from Jolokia.')
