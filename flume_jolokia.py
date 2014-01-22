@@ -39,13 +39,15 @@ class ConcreteJob(blackbird.plugins.base.JobBase):
         )
         result = self.__jolokia(request)
 
-        for mbean in result['value'].keys():
-            for attribute in jmx_items.attributes():
-                key = jmx_items.zabbix_key(mbean, attribute)
-                clock = result['timestamp']
-                value = result['value'][mbean][attribute]
+        if result:
+            for mbean in result['value'].keys():
+                for attribute in jmx_items.attributes():
+                    key = jmx_items.zabbix_key(mbean, attribute)
+                    clock = result['timestamp']
+                    value = result['value'][mbean][attribute]
 
-                self.__enqueue_item(key, value, clock)
+                    self.__enqueue_item(key, value, clock)
+
 
     def __build_discovery_items(self, jmx_items):
         discovery_item_dict = {}
@@ -54,26 +56,39 @@ class ConcreteJob(blackbird.plugins.base.JobBase):
         request = self.__request_search(jmx_items.mbean_pattern())
         result = self.__jolokia(request)
 
-        for mbean in result['value']:
-            discovery_item = {}
+        if result:
+            for mbean in result['value']:
+                discovery_item = {}
 
-            _, mbean_properties = mbean.split(':', 1)
-            discovery_item['{#MBEAN}'] = mbean_properties
+                _, mbean_properties = mbean.split(':', 1)
+                discovery_item['{#MBEAN}'] = mbean_properties
 
-            discovery_item_dict['data'].append(discovery_item)
+                discovery_item_dict['data'].append(discovery_item)
 
-        key = jmx_items.zabbix_discovery_key()
-        value = json.dumps(discovery_item_dict)
+            key = jmx_items.zabbix_discovery_key()
+            value = json.dumps(discovery_item_dict)
 
-        self.__enqueue_item(key, value)
+            self.__enqueue_item(key, value)
 
     def __jolokia(self, request):
-        result = urllib2.urlopen(
-            url=request,
-            timeout=self.options['jolokia_timeout'],
-        )
+        try:
+            result = urllib2.urlopen(
+                url=request,
+                timeout=self.options['jolokia_timeout'],
+            )
+            result_dict = json.load(result)
 
-        return json.load(result)
+            if result_dict['status'] == '200':
+                return result_dict
+            else:
+                self.logger.warn('Invalid status code returned from Jolokia.')
+                return None
+        except urllib2.URLError as url_error:
+            self.logger.warn(url_error)
+            return None
+        except urllib2.HTTPError as http_error:
+            self.logger.warn(http_error)
+            return None
 
     def __request_read(self, mbean, attributes):
         request = urllib2.Request(self.__jolokia_url())
