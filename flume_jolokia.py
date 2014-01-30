@@ -10,6 +10,10 @@ import urllib2
 import blackbird.plugins
 
 
+class JolokiaStatusError(Exception):
+    pass
+
+
 class ConcreteJob(blackbird.plugins.base.JobBase):
     def __init__(self, options, queue, logger):
         super(ConcreteJob, self).__init__(options, queue, logger)
@@ -18,19 +22,28 @@ class ConcreteJob(blackbird.plugins.base.JobBase):
         self.jmx_source_items = JMXSourceItems()
 
     def build_items(self):
-        self.__build_ping_item()
-        self.__build_items(self.jmx_channel_items)
-        self.__build_items(self.jmx_sink_items)
-        self.__build_items(self.jmx_source_items)
+        self.__enqueue_item('blackbird.flume_jolokia.version', __VERSION__)
+
+        try:
+            self.__build_items(self.jmx_channel_items)
+            self.__build_items(self.jmx_sink_items)
+            self.__build_items(self.jmx_source_items)
+        except:
+            self.__build_ping_item(False)
+            raise
+        else:
+            self.__build_ping_item(True)
 
     def build_discovery_items(self):
-        self.__build_discovery_items(self.jmx_channel_items)
-        self.__build_discovery_items(self.jmx_sink_items)
-        self.__build_discovery_items(self.jmx_source_items)
-
-    def __build_ping_item(self):
-        self.__enqueue_item('blackbird.flume_jolokia.ping', 1)
-        self.__enqueue_item('blackbird.flume_jolokia.version', __VERSION__)
+        try:
+            self.__build_discovery_items(self.jmx_channel_items)
+            self.__build_discovery_items(self.jmx_sink_items)
+            self.__build_discovery_items(self.jmx_source_items)
+        except:
+            self.__build_discovery_ping_item(False)
+            raise
+        else:
+            self.__build_discovery_ping_item(True)
 
     def __build_items(self, jmx_items):
         request = self.__request_read(
@@ -39,14 +52,19 @@ class ConcreteJob(blackbird.plugins.base.JobBase):
         )
         result = self.__jolokia(request)
 
-        if result:
-            for mbean in result['value'].keys():
-                for attribute in jmx_items.attributes():
-                    key = jmx_items.zabbix_key(mbean, attribute)
-                    clock = result['timestamp']
-                    value = result['value'][mbean][attribute]
+        for mbean in result['value'].keys():
+            for attribute in jmx_items.attributes():
+                key = jmx_items.zabbix_key(mbean, attribute)
+                clock = result['timestamp']
+                value = result['value'][mbean][attribute]
 
-                    self.__enqueue_item(key, value, clock)
+                self.__enqueue_item(key, value, clock)
+
+    def __build_ping_item(self, status):
+        if status:
+            self.__enqueue_item('blackbird.flume_jolokia.ping', 1)
+        else:
+            self.__enqueue_item('blackbird.flume_jolokia.ping', 0)
 
     def __build_discovery_items(self, jmx_items):
         discovery_item_dict = {}
@@ -55,39 +73,46 @@ class ConcreteJob(blackbird.plugins.base.JobBase):
         request = self.__request_search(jmx_items.mbean_pattern())
         result = self.__jolokia(request)
 
-        if result:
-            for mbean in result['value']:
-                discovery_item = {}
+        quantity = 0
 
-                _, mbean_properties = mbean.split(':', 1)
-                discovery_item['{#MBEAN}'] = mbean_properties
+        for mbean in result['value']:
+            quantity += 1
+            _, mbean_properties = mbean.split(':', 1)
 
-                discovery_item_dict['data'].append(discovery_item)
+            discovery_item_dict['data'].append(
+                {'{#MBEAN}': mbean_properties}
+            )
 
-            key = jmx_items.zabbix_discovery_key()
-            value = json.dumps(discovery_item_dict)
+        key = jmx_items.zabbix_discovery_key()
+        value = json.dumps(discovery_item_dict)
 
-            self.__enqueue_item(key, value)
+        self.__enqueue_item(key, value)
+
+        key = jmx_items.zabbix_discovery_qty_key()
+        value = quantity
+
+        self.__enqueue_item(key, value)
+
+    def __build_discovery_ping_item(self, status):
+        if status:
+            self.__enqueue_item('blackbird.flume_jolokia.discovery_ping', 1)
+        else:
+            self.__enqueue_item('blackbird.flume_jolokia.discovery_ping', 0)
 
     def __jolokia(self, request):
-        try:
-            result = urllib2.urlopen(
-                url=request,
-                timeout=self.options['jolokia_timeout'],
-            )
-            result_dict = json.load(result)
+        result = urllib2.urlopen(
+            url=request,
+            timeout=self.options['jolokia_timeout'],
+        )
+        result_dict = json.load(result)
 
-            if result_dict['status'] == 200:
-                return result_dict
-            else:
-                self.logger.warn('Invalid status code returned from Jolokia.')
-                return None
-        except urllib2.HTTPError as http_error:
-            self.logger.warn(str(http_error))
-            return None
-        except urllib2.URLError as url_error:
-            self.logger.warn(str(url_error))
-            return None
+        if not result_dict['status'] == 200:
+            raise JolokiaStatusError(
+                'Invalid status code "{0}" returned from Jolokia.'
+                ''.format(result_dict['status'])
+            )
+
+        return result_dict
 
     def __request_read(self, mbean, attributes):
         request = urllib2.Request(self.__jolokia_url())
@@ -196,6 +221,10 @@ class JMXItemsBase(object):
     def _zabbix_discovery_key(self):
         return 'Abstract Property.'
 
+    @abc.abstractproperty
+    def _zabbix_discovery_qty_key(self):
+        return 'Abstract Property.'
+
     def __init__(self):
         pass
 
@@ -211,6 +240,9 @@ class JMXItemsBase(object):
 
     def zabbix_discovery_key(self):
         return self._zabbix_discovery_key
+
+    def zabbix_discovery_qty_key(self):
+        return self._zabbix_discovery_qty_key
 
 
 class JMXChannelItems(JMXItemsBase):
@@ -239,6 +271,10 @@ class JMXChannelItems(JMXItemsBase):
     @property
     def _zabbix_discovery_key(self):
         return 'flume.channel.discovery'
+
+    @property
+    def _zabbix_discovery_qty_key(self):
+        return 'flume.channel.quantity'
 
 
 class JMXSinkItems(JMXItemsBase):
@@ -269,6 +305,10 @@ class JMXSinkItems(JMXItemsBase):
     def _zabbix_discovery_key(self):
         return 'flume.sink.discovery'
 
+    @property
+    def _zabbix_discovery_qty_key(self):
+        return 'flume.sink.quantity'
+
 
 class JMXSourceItems(JMXItemsBase):
     @property
@@ -296,3 +336,7 @@ class JMXSourceItems(JMXItemsBase):
     @property
     def _zabbix_discovery_key(self):
         return 'flume.source.discovery'
+
+    @property
+    def _zabbix_discovery_qty_key(self):
+        return 'flume.source.quantity'
