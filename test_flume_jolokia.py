@@ -66,6 +66,12 @@ class TestJMXChannelItems(object):
         expected_return = 'flume.channel.discovery'
         assert expected_return == jmx_channel_items.zabbix_discovery_key()
 
+    def test_zabbix_discovery_qty_key(self):
+        jmx_channel_items = JMXChannelItems()
+
+        expected_return = 'flume.channel.quantity'
+        assert expected_return == jmx_channel_items.zabbix_discovery_qty_key()
+
 
 class TestJMXSinkItems(object):
     def test_mbean_pattern(self):
@@ -104,6 +110,12 @@ class TestJMXSinkItems(object):
 
         expected_return = 'flume.sink.discovery'
         assert expected_return == jmx_sink_items.zabbix_discovery_key()
+
+    def test_zabbix_discovery_qty_key(self):
+        jmx_sink_items = JMXSinkItems()
+
+        expected_return = 'flume.sink.quantity'
+        assert expected_return == jmx_sink_items.zabbix_discovery_qty_key()
 
 
 class TestJMXSourceItems(object):
@@ -144,3 +156,9 @@ class TestJMXSourceItems(object):
 
         expected_return = 'flume.source.discovery'
         assert expected_return == jmx_source_items.zabbix_discovery_key()
+
+    def test_zabbix_discovery_qty_key(self):
+        jmx_source_items = JMXSourceItems()
+
+        expected_return = 'flume.source.quantity'
+        assert expected_return == jmx_source_items.zabbix_discovery_qty_key()
